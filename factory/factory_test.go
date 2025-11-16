@@ -2,6 +2,7 @@ package factory
 
 import (
 	"fmt"
+	"maps"
 	"testing"
 )
 
@@ -46,6 +47,53 @@ func (f *UserFactory) Retrieve(instance User) UserProperties {
 		ID:   instance.ID,
 		Name: instance.Name,
 		Age:  instance.Age,
+	}
+}
+
+type profile struct {
+	first string
+	age   int
+}
+
+type complexShape struct {
+	Profile profile
+	Tags    []string
+	Meta    map[string]int
+}
+
+type complexProperties struct {
+	profile profile
+	tags    []string
+	meta    map[string]int
+}
+
+type complexFactory struct{}
+
+func (f *complexFactory) Instantiate(props complexProperties) complexShape {
+	return complexShape{
+		Profile: props.profile,
+		Tags:    append([]string(nil), props.tags...),
+		Meta:    maps.Clone(props.meta),
+	}
+}
+
+func (f *complexFactory) Prepare(overrides Partial[complexProperties], seed int64) complexProperties {
+	props := complexProperties{
+		profile: profile{first: fmt.Sprintf("profile-%d", seed), age: int(seed % 50)},
+		tags:    []string{"alpha", "beta"},
+		meta:    map[string]int{"seed": int(seed)},
+	}
+	if overrides != nil {
+		overrides(&props)
+	}
+	return props
+}
+
+func (f *complexFactory) Retrieve(shape complexShape) complexProperties {
+	return complexProperties{
+		profile: shape.Profile,
+		tags:    append([]string(nil), shape.Tags...),
+		meta:    maps.Clone(shape.Meta),
 	}
 }
 
@@ -180,6 +228,55 @@ func TestUserFactoryWithOverrideLiteral(t *testing.T) {
 
 	if user.Age != 25 {
 		t.Errorf("Expected Age 25, got %d", user.Age)
+	}
+}
+
+func TestBuilderGeneratesNestedStructFields(t *testing.T) {
+	builder := Builder(&complexFactory{})
+	shape := builder.Build(nil)
+
+	if shape.Profile.first == "" {
+		t.Fatal("expected profile name to be set")
+	}
+	if len(shape.Tags) == 0 {
+		t.Fatal("expected tags to be generated")
+	}
+	if len(shape.Meta) == 0 {
+		t.Fatal("expected metadata to be generated")
+	}
+
+	// ensure retrieving and duplicating round-trips nested structures.
+	duplicated := builder.Duplicate(shape, nil)
+	if duplicated.Profile.first != shape.Profile.first {
+		t.Fatalf("duplicate lost profile: %s vs %s", duplicated.Profile.first, shape.Profile.first)
+	}
+	if len(duplicated.Tags) != len(shape.Tags) {
+		t.Fatalf("duplicate lost tags: %v", duplicated.Tags)
+	}
+	if len(duplicated.Meta) != len(shape.Meta) {
+		t.Fatalf("duplicate lost meta: %v", duplicated.Meta)
+	}
+}
+
+func TestBuilderOverridesSliceAndMapFields(t *testing.T) {
+	builder := Builder(&complexFactory{})
+	profileOverride := profile{first: "override", age: 42}
+	override := Override[complexProperties](map[string]any{
+		"profile": profileOverride,
+		"tags":    []string{"go", "forge"},
+		"meta":    map[string]int{"answer": 42},
+	})
+
+	shape := builder.Build(override)
+
+	if shape.Profile != profileOverride {
+		t.Fatalf("expected profile %+v, got %+v", profileOverride, shape.Profile)
+	}
+	if len(shape.Tags) != 2 || shape.Tags[0] != "go" || shape.Tags[1] != "forge" {
+		t.Fatalf("unexpected tags: %v", shape.Tags)
+	}
+	if len(shape.Meta) != 1 || shape.Meta["answer"] != 42 {
+		t.Fatalf("unexpected meta: %v", shape.Meta)
 	}
 }
 
